@@ -2,8 +2,11 @@
 
 namespace Notion;
 
+use DateTime;
 use GuzzleHttp\Client;
 use GuzzleHttp\Cookie\CookieJar;
+use GuzzleHttp\Exception\BadResponseException;
+use GuzzleHttp\Exception\GuzzleException;
 use Illuminate\Support\Arr;
 use Notion\Records\Blocks\BasicBlock;
 use Notion\Records\Blocks\BlockInterface;
@@ -18,6 +21,7 @@ use Psr\SimpleCache\CacheInterface;
 use Ramsey\Uuid\Uuid;
 use Ramsey\Uuid\UuidInterface;
 use Symfony\Component\Cache\Adapter\FilesystemAdapter;
+use Symfony\Component\Cache\Adapter\NullAdapter;
 
 class NotionClient
 {
@@ -51,7 +55,12 @@ class NotionClient
         $this->configuration = $config ?? new Configuration();
         $this->configuration->setToken($token);
 
-        $this->cache = new FilesystemAdapter('', $this->configuration->getCacheLifetime());
+        if ($this->configuration->getCacheLifetime() === -1) {
+            $this->cache = new NullAdapter();
+        } else {
+            $this->cache = new FilesystemAdapter('', $this->configuration->getCacheLifetime());
+        }
+
         $this->client = new Client([
             'base_uri' => $this->configuration->getApiBaseUrl(),
             'cookies' => CookieJar::fromArray(
@@ -93,7 +102,7 @@ class NotionClient
         return $collection;
     }
 
-    private function loadPageChunk(UuidInterface $blockId): array
+    public function loadPageChunk(UuidInterface $blockId): array
     {
         $response = $this->cachedJsonRequest('block-'.$blockId->toString(), 'loadPageChunk', [
             'pageId' => $blockId->toString(),
@@ -128,6 +137,25 @@ class NotionClient
         });
 
         return $results->toArray();
+    }
+
+    public function queryCollection(string $collectionId, string $collectionViewId = null, array $query = [], array $loader = null)
+    {
+        $loader = $loader ?? [
+                'type' => 'table',
+                'limit' => 50,
+                'searchQuery' => '',
+                'loadContentCover' => true
+            ];
+
+        $response = $this->cachedJsonRequest('query-collection-' . md5(serialize(func_get_args())), 'queryCollection', [
+            'collectionId' => $collectionId,
+            'collectionViewId' => $collectionViewId,
+            'loader' => $loader,
+            'query' => $query,
+        ]);
+
+        return $response;
     }
 
     public function getByParent(UuidInterface $getId, string $query = '')
@@ -179,12 +207,47 @@ class NotionClient
         });
     }
 
+    public function updateRecord(
+        BlockInterface $block,
+        array $updates
+    )
+    {
+        $operations = [];
+
+        foreach ($updates as $propertyName => $value) {
+            $block->set($propertyName, $value);
+            if ($propertyName === 'title') {
+                $path = ['properties', $propertyName];
+            } else {
+                $path = $block->getProperty($propertyName)->getPath();
+                $p = $block->getProperty($propertyName);
+            }
+
+            if ($value instanceof DateTime) {
+                $args = [['‣',[['d',['type' => 'date', 'start_date' => $value->format('Y-m-d')]]]]];
+            } else {
+                $args = [[$value]];
+            }
+
+            $operations[] = new BuildOperation(
+                $block->getId(),
+                $path,
+                $args,
+                'set',
+                $block->getTable()
+            );
+        }
+
+        $this->saveTransaction($operations);
+    }
+
     public function createRecord(
         string $table,
         BlockInterface $parent,
         array $attributes,
         array $children = []
-    ): UuidInterface {
+    ): UuidInterface
+    {
         $uuid = Uuid::uuid4();
         $operation = new BuildOperation(
             $uuid,
@@ -221,6 +284,25 @@ class NotionClient
 
         $this->client->post('submitTransaction', [
             'json' => ['operations' => $operations->toArray()],
+        ]);
+    }
+
+    /**
+     * @param BuildOperation[] $operations
+     */
+    public function saveTransaction(array $operations): void
+    {
+        $operations = collect($operations)->toArray();
+
+        $this->client->post('saveTransactions', [
+            'json' => [
+                'requestId' => Uuid::uuid4()->toString(),
+                'transactions' => [[
+                    'id' => Uuid::uuid4()->toString(),
+                    'operations' => $operations,
+                    'spaceId' => $this->getCurrentSpace()->getId()->toString()
+                ]]
+            ],
         ]);
     }
 
