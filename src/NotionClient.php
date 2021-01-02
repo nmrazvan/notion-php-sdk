@@ -207,24 +207,19 @@ class NotionClient
         });
     }
 
-    public function updateRecord(
-        BlockInterface $block,
-        array $updates
-    )
+    private function getUpdateOperations($block, $updates)
     {
         $operations = [];
 
         foreach ($updates as $propertyName => $value) {
-            $block->set($propertyName, $value);
             if ($propertyName === 'title') {
                 $path = ['properties', $propertyName];
             } else {
                 $path = $block->getProperty($propertyName)->getPath();
-                $p = $block->getProperty($propertyName);
             }
 
             if ($value instanceof DateTime) {
-                $args = [['‣',[['d',['type' => 'date', 'start_date' => $value->format('Y-m-d')]]]]];
+                $args = [['‣', [['d', ['type' => 'date', 'start_date' => $value->format('Y-m-d')]]]]];
             } else {
                 $args = [[$value]];
             }
@@ -238,7 +233,18 @@ class NotionClient
             );
         }
 
-        $this->saveTransaction($operations);
+        return $operations;
+    }
+
+    public function updateRecord(
+        BlockInterface $block,
+        array $updates
+    )
+    {
+        foreach ($updates as $key => $value) {
+            $block->set($key, $value);
+        }
+        $this->saveTransaction($this->getUpdateOperations($block, $updates));
     }
 
     public function createRecord(
@@ -249,28 +255,100 @@ class NotionClient
     ): UuidInterface
     {
         $uuid = Uuid::uuid4();
-        $operation = new BuildOperation(
+        $operations[] = new BuildOperation(
             $uuid,
             [],
-            array_merge(
-                [
-                    'id' => $uuid->toString(),
-                    'version' => 1,
-                    'alive' => true,
-                    'created_by' => $this->getCurrentUser()
-                        ->getId()
-                        ->toString(),
-                    'created_time' => time(),
-                    'parent_id' => $parent->getId()->toString(),
-                    'parent_table' => $parent->getTable(),
-                ],
-                $attributes
-            ),
+            [
+                'id' => $uuid->toString(),
+                'type' => 'page',
+                'version' => 1
+            ],
             'set',
             $table
         );
 
-        $this->submitTransation([$operation]);
+        $block = (new BasicBlock($uuid, $attributes))->toTypedBlock();
+        $block->setClient($this);
+        $block->createProperties($parent->get('schema'));
+
+        $operations = array_merge($operations, $this->getUpdateOperations($block, $attributes));
+        $operations[] = [
+            "id" => $uuid,
+            "table" => "block",
+            "path" => ["properties","CI}|"],
+            "command" => "set",
+            "args" => [["todo"]]
+        ];
+
+        $operations[] = new BuildOperation(
+            $uuid,
+            [],
+            [
+                'alive' => true,
+                'parent_id' => $parent->getId()->toString(),
+                'parent_table' => 'collection'
+            ],
+            'update',
+            $table
+        );
+
+        $operations[] = new BuildOperation(
+            $uuid,
+            ['created_by_id'],
+            $this->getCurrentUser()->getId()->toString(),
+            'set',
+            $table
+        );
+
+        $operations[] = new BuildOperation(
+            $uuid,
+            ['created_by_table'],
+            'notion_user',
+            'set',
+            $table
+        );
+
+        $operations[] = new BuildOperation(
+            $uuid,
+            ['created_time'],
+            time() * 1000,
+            'set',
+            $table
+        );
+
+        $operations[] = new BuildOperation(
+            $uuid,
+            ['last_edited_time'],
+            time() * 1000,
+            'set',
+            $table
+        );
+
+        $operations[] = new BuildOperation(
+            $uuid,
+            ['last_edited_by_id'],
+            $this->getCurrentUser()->getId()->toString(),
+            'set',
+            $table
+        );
+
+        $operations[] = new BuildOperation(
+            $uuid,
+            ['last_edited_by_table'],
+            'notion_user',
+            'set',
+            $table
+        );
+
+        $operations[] = new BuildOperation(
+            $uuid,
+            ['last_edited_time'],
+            time() * 1000,
+            'set',
+            $table
+        );
+
+        $this->saveTransaction($operations);
 
         return $uuid;
     }
