@@ -145,7 +145,8 @@ class NotionClient
                 'type' => 'table',
                 'limit' => 50,
                 'searchQuery' => '',
-                'loadContentCover' => true
+                'loadContentCover' => true,
+                "userTimeZone" => date_default_timezone_get()
             ];
 
         $response = $this->cachedJsonRequest('query-collection-' . md5(serialize(func_get_args())), 'queryCollection', [
