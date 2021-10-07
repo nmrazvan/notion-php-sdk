@@ -139,7 +139,7 @@ class NotionClient
         return $results->toArray();
     }
 
-    public function queryCollection(string $collectionId, string $collectionViewId = null, array $query = [], array $loader = null)
+    public function queryCollection(string $spaceId, string $collectionId, string $collectionViewId = null, array $query = [], array $loader = null)
     {
         $loader = $loader ?? [
                 'type' => 'table',
@@ -150,8 +150,8 @@ class NotionClient
             ];
 
         $response = $this->cachedJsonRequest('query-collection-' . md5(serialize(func_get_args())), 'queryCollection', [
-            'collectionId' => $collectionId,
-            'collectionViewId' => $collectionViewId,
+            'collection' => ["id" => $collectionId, "spaceId" => $spaceId],
+            'collectionView' => ["id" => $collectionViewId, "spaceId" => $spaceId],
             'loader' => $loader,
             'query' => $query,
         ]);
